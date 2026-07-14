@@ -6,16 +6,37 @@
 
 	let plan = $derived(data.plan);
 	let recipes = $derived(data.recipes);
-	let schedule = $derived(data.schedule);
+	let schedule = $derived(data.schedule || []);
 
+	const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 	const categories = ['Early Morning', 'Breakfast', 'Mid Morning', 'Lunch', 'Evening', 'Dinner', 'Post Dinner'];
+	
+	let currentWeek = $state(1);
 	let loading = $state(false);
+	
 	let showEditModal = $state(false);
+	let showAddModal = $state(false);
+	
+	let targetDayForAdd = $state(null);
+	let targetCategoryForAdd = $state('');
+
 	let editForm = $state({
 		id: null,
 		meal_name: '',
 		meal_time: '',
 		meal_category: '',
+		recipe_id: null,
+		calories: 0,
+		quantity: 1.0,
+		comments: '',
+		week_number: 1,
+		day_of_week: 1
+	});
+
+	let addForm = $state({
+		meal_name: '',
+		meal_time: '08:00 AM',
+		meal_category: 'Breakfast',
 		recipe_id: null,
 		calories: 0,
 		quantity: 1.0,
@@ -32,6 +53,16 @@
 		'Post Dinner': '09:30 PM'
 	};
 
+	// Calculated total weeks based on existing schedule items
+	let totalWeeks = $derived(
+		schedule.reduce((max, s) => Math.max(max, s.week_number || 0), 0)
+	);
+
+	// Derived state for unscheduled pool meals (legacy records with null week or day)
+	let unscheduledMeals = $derived(
+		schedule.filter(s => s.week_number === null || s.day_of_week === null)
+	);
+
 	function handleEditCategoryChange(cat) {
 		editForm.meal_category = cat;
 		if (categoryTimes[cat]) {
@@ -39,12 +70,32 @@
 		}
 	}
 
-	function handleRecipeSelect(recipeId) {
+	function handleAddCategoryChange(cat) {
+		addForm.meal_category = cat;
+		if (categoryTimes[cat]) {
+			addForm.meal_time = categoryTimes[cat];
+		}
+	}
+
+	function handleRecipeSelectForEdit(recipeId) {
 		const r = recipes.find(rec => rec.id === parseInt(recipeId));
 		if (r) {
 			editForm.recipe_id = r.id;
 			editForm.meal_name = r.name;
 			editForm.calories = r.calories;
+		} else {
+			editForm.recipe_id = null;
+		}
+	}
+
+	function handleRecipeSelectForAdd(recipeId) {
+		const r = recipes.find(rec => rec.id === parseInt(recipeId));
+		if (r) {
+			addForm.recipe_id = r.id;
+			addForm.meal_name = r.name;
+			addForm.calories = r.calories;
+		} else {
+			addForm.recipe_id = null;
 		}
 	}
 
@@ -57,9 +108,26 @@
 			recipe_id: meal.recipe_id,
 			calories: meal.calories || 0,
 			quantity: parseFloat(meal.quantity) || 1.0,
-			comments: meal.comments || ''
+			comments: meal.comments || '',
+			week_number: meal.week_number || currentWeek || 1,
+			day_of_week: meal.day_of_week || 1
 		};
 		showEditModal = true;
+	}
+
+	function openAddModal(dayIndex, category) {
+		targetDayForAdd = dayIndex + 1; // 1-indexed (Monday is 1)
+		targetCategoryForAdd = category;
+		addForm = {
+			meal_name: '',
+			meal_time: categoryTimes[category] || '08:00 AM',
+			meal_category: category,
+			recipe_id: null,
+			calories: 0,
+			quantity: 1.0,
+			comments: ''
+		};
+		showAddModal = true;
 	}
 
 	async function saveEdit() {
@@ -74,7 +142,9 @@
 					recipe_id: editForm.recipe_id,
 					calories: parseInt(editForm.calories) || 0,
 					quantity: parseFloat(editForm.quantity) || 1.0,
-					comments: editForm.comments
+					comments: editForm.comments,
+					week_number: parseInt(editForm.week_number) || 1,
+					day_of_week: parseInt(editForm.day_of_week) || 1
 				})
 				.eq('id', editForm.id);
 
@@ -88,16 +158,48 @@
 		}
 	}
 
+	async function saveAdd() {
+		loading = true;
+		try {
+			const { error } = await supabase
+				.from('diet_plan_schedule')
+				.insert([{
+					plan_id: plan.id,
+					meal_category: addForm.meal_category,
+					meal_time: addForm.meal_time,
+					recipe_id: addForm.recipe_id,
+					meal_name: addForm.meal_name,
+					calories: parseInt(addForm.calories) || 0,
+					quantity: parseFloat(addForm.quantity) || 1.0,
+					comments: addForm.comments,
+					day_of_week: targetDayForAdd,
+					week_number: currentWeek
+				}]);
+
+			if (error) throw error;
+			showAddModal = false;
+			await invalidateAll();
+		} catch (err) {
+			alert('Error adding meal: ' + err.message);
+		} finally {
+			loading = false;
+		}
+	}
+
 	async function deleteEntry(id) {
-		if (!confirm('Remove this meal from the plan pool?')) return;
+		if (!confirm('Remove this meal from the plan?')) return;
 		const { error } = await supabase.from('diet_plan_schedule').delete().eq('id', id);
 		if (error) alert(error.message);
 		else await invalidateAll();
 	}
 
-	function getMealsForCategory(cat) {
+	function getMealsForCell(dayIndex, category) {
 		return schedule
-			.filter((s) => s.meal_category === cat)
+			.filter((s) => 
+				s.week_number === currentWeek && 
+				s.day_of_week === (dayIndex + 1) && 
+				s.meal_category === category
+			)
 			.sort((a, b) => {
 				const timeA = a.meal_time?.includes('PM') && !a.meal_time?.startsWith('12') ? 12 : 0;
 				const hourA = parseInt(a.meal_time?.split(':')[0] || '0') + timeA;
@@ -127,11 +229,24 @@
 				return { bg: '#F8FAFC', text: '#64748B', dot: '#94A3B8' };
 		}
 	}
+
+	function getCategoryIcon(cat) {
+		switch (cat) {
+			case 'Early Morning': return '🌅';
+			case 'Breakfast': return '🍳';
+			case 'Mid Morning': return '🍎';
+			case 'Lunch': return '🍲';
+			case 'Evening': return '🍵';
+			case 'Dinner': return '🍽️';
+			case 'Post Dinner': return '🥛';
+			default: return '🍴';
+		}
+	}
 </script>
 
 <div class="builder-container">
 	<!-- Header -->
-	<div class="page-head">
+	<div class="page-head" style="align-items: center;">
 		<div class="head-left">
 			<a href="/admin/diets" class="back-link">
 				<svg
@@ -146,86 +261,147 @@
 				Back to Diet Plans
 			</a>
 			<div class="title-wrap">
-				<h1>{plan?.name} <span class="tag">Meal Pool</span></h1>
-				<p>Curate approved lists of meals for round-robin subscription distribution.</p>
+				<h1>{plan?.name} <span class="tag">Weekly Matrix</span></h1>
+				<p>Curate scheduled week-by-week meals for subscribers.</p>
 			</div>
 		</div>
 
-		<div class="head-right">
+		<div class="head-right" style="flex-direction: row; gap: 1rem; align-items: center;">
+			<!-- Weekly Navigation -->
+			<div class="week-pill shadow-sm" style="display: flex; align-items: center; background: white; border: 1px solid var(--border); padding: 0.25rem; border-radius: 99px; gap: 0.25rem;">
+				<button 
+					class="nav-btn" 
+					onclick={() => currentWeek = Math.max(1, currentWeek - 1)}
+					disabled={currentWeek === 1}
+				>
+					◀
+				</button>
+				<div class="week-info" style="text-align: center; min-width: 100px; display: flex; flex-direction: column; align-items: center; padding: 0 0.5rem;">
+					<span class="label" style="font-size: 0.5625rem; font-weight: 800; color: var(--text-muted); letter-spacing: 0.05em; text-transform: uppercase;">Active Week</span>
+					<span class="val" style="font-size: 0.8125rem; font-weight: 800; color: var(--text);">Week {currentWeek}</span>
+				</div>
+				<button 
+					class="nav-btn" 
+					onclick={() => currentWeek++}
+				>
+					▶
+				</button>
+			</div>
+
 			<div class="action-btns">
-				<a href="/admin/diets/{plan?.id}/add-meal" class="btn-primary">
-					<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-					Add Meal to Pool
+				<a href="/admin/diets/{plan?.id}/add-meal" class="btn-outline">
+					Legacy Add Page
 				</a>
 			</div>
 		</div>
 	</div>
 
-	<!-- Category Pools Grid -->
-	<div class="planner-grid">
-		{#each categories as cat}
-			{@const meals = getMealsForCategory(cat)}
-			<div class="day-col">
-				<div class="day-header" style="border-bottom: 2px solid {getCategoryColor(cat).dot}">
-					<span class="day-name">{cat}</span>
-					<span class="meal-count">{meals.length} items</span>
-				</div>
-
-				<div class="meal-canvas">
-					{#each meals as meal}
-						{@const colors = getCategoryColor(meal.meal_category)}
-						<div class="meal-card" role="button" tabindex="0" style="--accent: {colors.dot}; cursor: pointer;" onclick={() => openEditModal(meal)} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openEditModal(meal); } }}>
-							<div class="m-top">
-								<span class="m-cat" style="background: {colors.bg}; color: {colors.text}">
-									<span class="dot" style="background: {colors.dot}"></span>
-									{meal.meal_category}
-								</span>
-								<div class="btn-group">
-									<button class="btn-edit" onclick={(e) => { e.stopPropagation(); openEditModal(meal); }} title="Edit meal">
-										<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-									</button>
-									<button class="btn-del" onclick={(e) => { e.stopPropagation(); deleteEntry(meal.id); }} title="Remove meal">
-									<svg
-										xmlns="http://www.w3.org/2000/svg"
-										width="14"
-										height="14"
-										viewBox="0 0 24 24"
-										fill="none"
-										stroke="currentColor"
-										stroke-width="3"
-										><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"
-										></line></svg
-									>
-								</button>
-								</div>
-							</div>
-
-							<div class="m-info">
-								<span class="m-time">{meal.meal_time || 'Any Time'}</span>
-								<h4 class="m-name">{meal.meal_name || meal.recipes?.name || 'Untitled Meal'}</h4>
-								{#if meal.calories || meal.recipes?.calories}
-									<span class="m-kcal">
-										{Math.round((meal.calories || meal.recipes?.calories || 0) * (meal.quantity || 1))} kcal
-										{#if meal.quantity && Number(meal.quantity) !== 1}
-											<span class="qty-pill" style="font-size: 0.625rem; font-weight: 700; color: #4B5563; background: #F3F4F6; padding: 1px 4px; border-radius: 4px; margin-left: 4px;">x{meal.quantity}</span>
-										{/if}
-									</span>
-								{/if}
-								{#if meal.comments}
-									<p class="m-comments">{meal.comments}</p>
-								{/if}
-							</div>
-						</div>
-					{:else}
-						<div class="empty-state">
-							<div class="empty-icon">🍽️</div>
-							<p>Empty meal pool</p>
-						</div>
-					{/each}
-				</div>
+	<!-- Weekly Matrix Planner Grid -->
+	<div class="matrix-grid-wrapper shadow-sm" style="border: 1px solid var(--border); border-radius: var(--radius-lg); background: white; overflow: hidden; margin-top: 1.5rem;">
+		<div class="matrix-grid">
+			<!-- Headers -->
+			<div class="matrix-header-cell corner-cell">
+				<span class="main-label">Slots Menu</span>
+				<span class="sub-label">Weekly View</span>
 			</div>
-		{/each}
+			{#each days as day, i}
+				<div class="matrix-header-cell day-header-cell" style="text-align: center;">
+					<span class="day-name">{day}</span>
+				</div>
+			{/each}
+
+			<!-- Rows -->
+			{#each categories as category}
+				<div class="matrix-category-cell">
+					<span class="cat-icon">{getCategoryIcon(category)}</span>
+					<div class="cat-meta">
+						<span class="cat-name">{category}</span>
+						<span class="cat-time">{categoryTimes[category]}</span>
+					</div>
+				</div>
+
+				{#each days as day, i}
+					{@const meals = getMealsForCell(i, category)}
+					<div class="matrix-cell">
+						{#if meals.length > 0}
+							<div class="meals-stack">
+								{#each meals as meal}
+									{@const colors = getCategoryColor(meal.meal_category)}
+									<div 
+										class="matrix-meal-card animate-in" 
+										role="button"
+										tabindex="0"
+										style="border-left: 4px solid {colors.dot};" 
+										onclick={() => openEditModal(meal)}
+										onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openEditModal(meal); } }}
+									>
+										<div class="meal-card-top">
+											<span class="meal-time">{meal.meal_time}</span>
+											<div class="card-action-btns">
+												<button class="btn-card-edit" onclick={(e) => { e.stopPropagation(); openEditModal(meal); }} title="Edit meal">
+													✏️
+												</button>
+												<button class="btn-card-delete" onclick={(e) => { e.stopPropagation(); deleteEntry(meal.id); }} title="Remove meal">
+													🗑️
+												</button>
+											</div>
+										</div>
+										<h4 class="meal-title-text" style="font-size: 0.75rem; font-weight: 700; margin: 2px 0 4px 0;">{meal.meal_name || meal.recipes?.name || 'Untitled Meal'}</h4>
+										<div class="meal-stats-bar">
+											<span class="meal-kcal-badge">{Math.round((meal.calories || meal.recipes?.calories || 0) * (meal.quantity || 1))} kcal</span>
+											{#if meal.quantity && Number(meal.quantity) !== 1}
+												<span class="qty-badge-inline">x{meal.quantity}</span>
+											{/if}
+										</div>
+										{#if meal.comments}
+											<p class="meal-notes-text">{meal.comments}</p>
+										{/if}
+									</div>
+								{/each}
+								<button class="btn-add-inline-plus" onclick={() => openAddModal(i, category)}>
+									+ Add Item
+								</button>
+							</div>
+						{:else}
+							<button class="btn-empty-matrix-slot" onclick={() => openAddModal(i, category)} style="min-height: 80px; width: 100%;">
+								<span class="slot-plus-char" style="font-size: 1rem;">+</span>
+								<span class="slot-plus-lbl" style="font-size: 0.5625rem;">Add</span>
+							</button>
+						{/if}
+					</div>
+				{/each}
+			{/each}
+		</div>
 	</div>
+
+	<!-- Unscheduled Pool (Legacy Items) -->
+	{#if unscheduledMeals.length > 0}
+		<div class="unscheduled-section card glass" style="margin-top: 2.5rem; padding: 1.5rem; border: 1px dashed var(--border); background: rgba(0,0,0,0.01);">
+			<h3 style="font-size: 1rem; font-weight: 800; color: var(--text-secondary); margin-bottom: 0.25rem; display: flex; align-items: center; gap: 0.5rem;">
+				<span>⚠️</span> Unscheduled Meals Pool ({unscheduledMeals.length})
+			</h3>
+			<p class="subtitle" style="margin-bottom: 1.25rem;">These legacy meals are not assigned to a week or day. Edit them to assign them to the matrix grid.</p>
+			
+			<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1rem;">
+				{#each unscheduledMeals as meal}
+					{@const colors = getCategoryColor(meal.meal_category)}
+					<div class="matrix-meal-card animate-in" style="border-left: 4px solid {colors.dot}; background: white; padding: 0.75rem;" onclick={() => openEditModal(meal)} role="button" tabindex="0" onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openEditModal(meal); } }}>
+						<div class="meal-card-top" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.375rem;">
+							<span class="meal-time" style="font-size: 0.625rem; font-weight: 800; color: var(--text-muted);">{meal.meal_category}</span>
+							<div class="card-action-btns">
+								<button class="btn-card-edit" onclick={(e) => { e.stopPropagation(); openEditModal(meal); }} title="Edit meal">✏️</button>
+								<button class="btn-card-delete" onclick={(e) => { e.stopPropagation(); deleteEntry(meal.id); }} title="Delete meal">🗑️</button>
+							</div>
+						</div>
+						<h4 style="font-size: 0.75rem; font-weight: 700; color: var(--text); margin-bottom: 0.25rem;">{meal.meal_name || meal.recipes?.name || 'Untitled Meal'}</h4>
+						<span class="meal-kcal-badge" style="font-size: 0.625rem; font-weight: 800; color: var(--primary-accent); background: var(--primary-accent-light); padding: 1px 5px; border-radius: 4px;">
+							{Math.round((meal.calories || meal.recipes?.calories || 0) * (meal.quantity || 1))} kcal
+						</span>
+					</div>
+				{/each}
+			</div>
+		</div>
+	{/if}
 </div>
 
 <!-- Edit Meal Modal -->
@@ -236,11 +412,11 @@
 				<h3>Edit Pool Meal</h3>
 				<button class="btn-close" onclick={() => (showEditModal = false)}>&times;</button>
 			</div>
-			<div class="modal-body">
+			<div class="modal-body" style="max-height: 75vh; overflow-y: auto; padding-right: 0.5rem;">
 
 				<div class="form-group">
 					<label>Select Meal from Library</label>
-					<select bind:value={editForm.recipe_id} onchange={(e) => handleRecipeSelect(e.target.value)}>
+					<select value={editForm.recipe_id || ''} onchange={(e) => handleRecipeSelectForEdit(e.target.value)}>
 						<option value="">-- Custom Meal (No Recipe Link) --</option>
 						{#each recipes as rec}
 							<option value={rec.id}>{rec.name} ({rec.calories} kcal)</option>
@@ -279,6 +455,21 @@
 					</div>
 				</div>
 
+				<div class="form-row">
+					<div class="form-group">
+						<label>Week Number</label>
+						<input type="number" bind:value={editForm.week_number} min="1" required />
+					</div>
+					<div class="form-group">
+						<label>Day of Week</label>
+						<select bind:value={editForm.day_of_week}>
+							{#each days as day, index}
+								<option value={index + 1}>{day}</option>
+							{/each}
+						</select>
+					</div>
+				</div>
+
 				<div class="form-group">
 					<label>Comments / Notes</label>
 					<input type="text" bind:value={editForm.comments} />
@@ -288,6 +479,73 @@
 					<button class="btn-outline" onclick={() => (showEditModal = false)}>Cancel</button>
 					<button class="btn-primary" onclick={saveEdit} disabled={loading}>
 						{loading ? 'Saving...' : 'Save Changes'}
+					</button>
+				</div>
+			</div>
+		</div>
+	</div>
+{/if}
+
+<!-- Add Meal Modal -->
+{#if showAddModal}
+	<div class="modal-overlay" onclick={() => (showAddModal = false)}>
+		<div class="modal" onclick={(e) => e.stopPropagation()}>
+			<div class="modal-header">
+				<h3>Add Meal to Plan</h3>
+				<button class="btn-close" onclick={() => (showAddModal = false)}>&times;</button>
+			</div>
+			<div class="modal-body" style="max-height: 75vh; overflow-y: auto; padding-right: 0.5rem;">
+
+				<div class="form-group">
+					<label>Select Meal from Library</label>
+					<select value={addForm.recipe_id || ''} onchange={(e) => handleRecipeSelectForAdd(e.target.value)}>
+						<option value="">-- Custom Meal (No Recipe Link) --</option>
+						{#each recipes as rec}
+							<option value={rec.id}>{rec.name} ({rec.calories} kcal)</option>
+						{/each}
+					</select>
+				</div>
+
+				<div class="form-group">
+					<label>Meal Name</label>
+					<input type="text" bind:value={addForm.meal_name} required />
+				</div>
+
+				<div class="form-row">
+					<div class="form-group">
+						<label>Meal Category</label>
+						<select bind:value={addForm.meal_category} onchange={(e) => handleAddCategoryChange(e.target.value)}>
+							{#each categories as cat}
+								<option value={cat}>{cat}</option>
+							{/each}
+						</select>
+					</div>
+					<div class="form-group">
+						<label>Meal Time</label>
+						<input type="text" bind:value={addForm.meal_time} required />
+					</div>
+				</div>
+
+				<div class="form-row">
+					<div class="form-group">
+						<label>Calories (kcal)</label>
+						<input type="number" bind:value={addForm.calories} required />
+					</div>
+					<div class="form-group">
+						<label>Quantity / Multiplier</label>
+						<input type="number" step="0.05" bind:value={addForm.quantity} required />
+					</div>
+				</div>
+
+				<div class="form-group">
+					<label>Comments / Notes</label>
+					<input type="text" bind:value={addForm.comments} />
+				</div>
+
+				<div class="modal-footer">
+					<button class="btn-outline" onclick={() => (showAddModal = false)}>Cancel</button>
+					<button class="btn-primary" onclick={saveAdd} disabled={loading}>
+						{loading ? 'Adding...' : 'Add Meal'}
 					</button>
 				</div>
 			</div>
@@ -774,5 +1032,226 @@
 		.planner-grid {
 			grid-template-columns: repeat(2, 1fr);
 		}
+	}
+
+	/* Weekly Matrix styles */
+	.matrix-grid-wrapper {
+		background: white;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-lg);
+		overflow: hidden;
+	}
+	.matrix-grid {
+		display: grid;
+		grid-template-columns: 150px repeat(7, minmax(160px, 1fr));
+		align-items: stretch;
+		overflow-x: auto;
+	}
+	.matrix-header-cell {
+		background: #f8fafc;
+		padding: 1.25rem 1rem;
+		border-bottom: 1px solid var(--border-light);
+		border-right: 1px solid var(--border-light);
+		display: flex;
+		flex-direction: column;
+		justify-content: center;
+		min-height: 70px;
+	}
+	.corner-cell {
+		background: #f1f5f9;
+	}
+	.corner-cell .main-label {
+		font-size: 0.8125rem;
+		font-weight: 800;
+		color: var(--text);
+	}
+	.corner-cell .sub-label {
+		font-size: 0.625rem;
+		font-weight: 700;
+		color: var(--text-muted);
+		text-transform: uppercase;
+	}
+	.day-header-cell {
+		align-items: center;
+		text-align: center;
+	}
+	.day-header-cell:last-child {
+		border-right: none;
+	}
+	.day-name {
+		font-size: 0.8125rem;
+		font-weight: 800;
+		color: var(--text);
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+	}
+	.matrix-category-cell {
+		background: #f8fafc;
+		padding: 1rem 0.75rem;
+		border-bottom: 1px solid var(--border-light);
+		border-right: 2px solid var(--border);
+		display: flex;
+		align-items: center;
+		gap: 0.625rem;
+	}
+	.cat-icon {
+		font-size: 1.35rem;
+		display: inline-flex;
+	}
+	.cat-meta {
+		display: flex;
+		flex-direction: column;
+		gap: 0.125rem;
+	}
+	.cat-name {
+		font-size: 0.75rem;
+		font-weight: 800;
+		color: var(--text);
+		text-transform: uppercase;
+		letter-spacing: 0.02em;
+	}
+	.cat-time {
+		font-size: 0.625rem;
+		font-weight: 700;
+		color: var(--text-muted);
+	}
+	.matrix-cell {
+		padding: 0.5rem;
+		border-bottom: 1px solid var(--border-light);
+		border-right: 1px solid var(--border-light);
+		background: #fafafb;
+		display: flex;
+		flex-direction: column;
+		justify-content: center;
+		min-height: 140px;
+	}
+	.matrix-cell:last-child {
+		border-right: none;
+	}
+	.meals-stack {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+		height: 100%;
+		justify-content: center;
+	}
+	.matrix-meal-card {
+		background: white;
+		border: 1px solid var(--border-light);
+		border-radius: 10px;
+		padding: 0.625rem;
+		box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+		position: relative;
+		cursor: pointer;
+		transition: all 0.2s ease-in-out;
+	}
+	.matrix-meal-card:hover {
+		transform: translateY(-2px);
+		box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05);
+		border-color: var(--accent);
+	}
+	.meal-card-top {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		margin-bottom: 0.25rem;
+	}
+	.meal-time {
+		font-size: 0.625rem;
+		font-weight: 800;
+		color: var(--text-muted);
+	}
+	.card-action-btns {
+		display: flex;
+		gap: 0.125rem;
+		opacity: 0;
+		transition: opacity 0.2s;
+	}
+	.matrix-meal-card:hover .card-action-btns {
+		opacity: 1;
+	}
+	.btn-card-edit,
+	.btn-card-delete {
+		background: none;
+		border: none;
+		cursor: pointer;
+		font-size: 0.6875rem;
+		padding: 1px 3px;
+		border-radius: 3px;
+	}
+	.btn-card-edit:hover { background: #eff6ff; }
+	.btn-card-delete:hover { background: #fef2f2; }
+
+	.meal-title-text {
+		font-size: 0.75rem;
+		font-weight: 700;
+		color: var(--text);
+		line-height: 1.3;
+		margin-bottom: 0.375rem;
+		word-break: break-word;
+	}
+	.meal-stats-bar {
+		display: flex;
+		align-items: center;
+		gap: 0.375rem;
+	}
+	.meal-kcal-badge {
+		font-size: 0.625rem;
+		font-weight: 800;
+		color: var(--primary-accent);
+		background: var(--primary-accent-light);
+		padding: 1px 5px;
+		border-radius: 4px;
+	}
+	.qty-badge-inline {
+		font-size: 0.5625rem;
+		font-weight: 800;
+		color: #4b5563;
+		background: #f3f4f6;
+		padding: 1px 4px;
+		border-radius: 4px;
+	}
+	.meal-notes-text {
+		font-size: 0.625rem;
+		font-style: italic;
+		color: var(--text-muted);
+		border-top: 1px dashed var(--border-light);
+		margin-top: 0.375rem;
+		padding-top: 0.375rem;
+		word-break: break-word;
+	}
+	.btn-add-inline-plus {
+		width: 100%;
+		padding: 0.25rem;
+		border: 1px dashed var(--border);
+		border-radius: 6px;
+		background: transparent;
+		color: var(--primary-accent);
+		font-size: 0.625rem;
+		font-weight: 700;
+		cursor: pointer;
+		transition: all 0.2s;
+	}
+	.btn-add-inline-plus:hover {
+		background: var(--primary-accent-light);
+		border-color: var(--primary-accent);
+	}
+	.btn-empty-matrix-slot {
+		border: 1px dashed var(--border);
+		border-radius: 8px;
+		background: transparent;
+		color: var(--text-muted);
+		cursor: pointer;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 0.125rem;
+		transition: all 0.2s;
+	}
+	.btn-empty-matrix-slot:hover {
+		border-color: var(--primary-accent);
+		color: var(--primary-accent);
+		background: var(--primary-accent-light);
 	}
 </style>

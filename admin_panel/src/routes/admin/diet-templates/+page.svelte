@@ -57,8 +57,8 @@
         <tbody>
           {#each templates as t}
             <tr>
-              <td><code>{t.diet_code}</code></td>
-              <td><strong>{t.diet_name}</strong></td>
+              <td><a href="/admin/diet-templates/{t.id}" class="template-link"><code>{t.diet_code}</code></a></td>
+              <td><a href="/admin/diet-templates/{t.id}" class="template-link"><strong>{t.diet_name}</strong></a></td>
               <td><span class="badge">{t.target}</span></td>
               <td>{t.food_type}</td>
               <td>{t.calories_min} - {t.calories_max}</td>
@@ -88,5 +88,7 @@
   .badge { font-size: 0.6875rem; font-weight: 700; background: var(--bg); padding: 2px 8px; border-radius: 4px; }
   .btn-danger-sm { background: none; border: 1px solid var(--border); padding: 0.375rem 0.75rem; border-radius: 6px; font-size: 0.75rem; font-weight: 600; cursor: pointer; color: #EF4444; }
   .btn-danger-sm:hover { background: #FEF2F2; }
+  .template-link { color: var(--primary-accent); text-decoration: none; }
+  .template-link:hover { text-decoration: underline; color: var(--primary-accent-hover); }
   .loading, .empty { text-align: center; padding: 3rem; color: var(--text-muted); }
 </style>

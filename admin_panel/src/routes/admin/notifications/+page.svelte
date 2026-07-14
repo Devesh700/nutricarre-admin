@@ -5,7 +5,9 @@
   let broadcast = $state({
     title: '',
     description: '',
-    type: 'alert'
+    type: 'alert',
+    url: '',
+    image_url: ''
   });
 
   let automation = $state({
@@ -17,9 +19,21 @@
   let message = $state({ type: '', text: '' });
   let stats = $state({ total: 0, read: 0 });
 
+  // Achievements state
+  let achievements = $state([]);
+  let newAchievement = $state({
+    title: '',
+    description: '',
+    metric_type: 'diet_consistency',
+    target_value: 7
+  });
+  let achievementMessage = $state({ type: '', text: '' });
+  let isAchievementLoading = $state(false);
+
   onMount(async () => {
     fetchStats();
     fetchSettings();
+    fetchAchievements();
   });
 
   async function fetchSettings() {
@@ -57,7 +71,8 @@
     stats = { total: total || 0, read: read || 0 };
   }
 
-  async function handleBroadcast() {
+  async function handleBroadcast(e) {
+    if (e) e.preventDefault();
     if (!broadcast.title || !broadcast.description) return;
     
     loading = true;
@@ -72,13 +87,15 @@
         title: broadcast.title,
         description: broadcast.description,
         type: broadcast.type,
+        url: broadcast.type === 'social' ? (broadcast.url || null) : null,
+        image_url: broadcast.type === 'social' ? (broadcast.image_url || null) : null
       }));
 
       const { error } = await supabase.from('notifications').insert(notifications);
       if (error) throw error;
 
       message = { type: 'success', text: `Broadcast sent to ${users.length} users successfully!` };
-      broadcast = { title: '', description: '', type: 'alert' };
+      broadcast = { title: '', description: '', type: 'alert', url: '', image_url: '' };
       fetchStats();
     } catch (e) {
       message = { type: 'error', text: e.message };
@@ -119,6 +136,76 @@
       message = { type: 'error', text: e.message };
     } finally {
       loading = false;
+    }
+  }
+
+  // Achievements methods
+  async function fetchAchievements() {
+    const { data, error } = await supabase
+      .from('achievements')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (!error && data) {
+      achievements = data;
+    }
+  }
+
+  async function handleAddAchievement(e) {
+    if (e) e.preventDefault();
+    if (!newAchievement.title || !newAchievement.description || newAchievement.target_value <= 0) return;
+    
+    isAchievementLoading = true;
+    achievementMessage = { type: '', text: '' };
+
+    try {
+      const { error } = await supabase
+        .from('achievements')
+        .insert({
+          title: newAchievement.title,
+          description: newAchievement.description,
+          metric_type: newAchievement.metric_type,
+          target_value: newAchievement.target_value,
+          is_active: true
+        });
+
+      if (error) throw error;
+
+      achievementMessage = { type: 'success', text: 'Achievement goal created successfully!' };
+      newAchievement = { title: '', description: '', metric_type: 'diet_consistency', target_value: 7 };
+      await fetchAchievements();
+    } catch (err) {
+      achievementMessage = { type: 'error', text: err.message };
+    } finally {
+      isAchievementLoading = false;
+    }
+  }
+
+  async function toggleAchievement(id, currentStatus) {
+    try {
+      const { error } = await supabase
+        .from('achievements')
+        .update({ is_active: !currentStatus })
+        .eq('id', id);
+
+      if (error) throw error;
+      await fetchAchievements();
+    } catch (err) {
+      alert('Error updating status: ' + err.message);
+    }
+  }
+
+  async function deleteAchievement(id) {
+    if (!confirm('Are you sure you want to delete this achievement goal?')) return;
+    try {
+      const { error } = await supabase
+        .from('achievements')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+      await fetchAchievements();
+    } catch (err) {
+      alert('Error deleting achievement: ' + err.message);
     }
   }
 </script>
@@ -172,6 +259,17 @@
             <option value="social">Social/Community</option>
           </select>
         </div>
+
+        {#if broadcast.type === 'social'}
+          <div class="input-group">
+            <label for="url">Social Redirect URL</label>
+            <input type="url" id="url" bind:value={broadcast.url} placeholder="e.g. https://instagram.com/p/..." required />
+          </div>
+          <div class="input-group">
+            <label for="image_url">Optional Image URL</label>
+            <input type="url" id="image_url" bind:value={broadcast.image_url} placeholder="e.g. https://domain.com/photo.jpg" />
+          </div>
+        {/if}
 
         <button type="submit" class="btn btn-primary" disabled={loading}>
           {loading ? 'Sending...' : 'Send Broadcast'}
@@ -236,6 +334,94 @@
           </div>
           <button class="save-small" onclick={() => saveAutomation('steps')}>Update</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Manage Achievement Goals -->
+  <div class="achievements-section-container card glass" style="margin-top: 2rem;">
+    <h3>Manage Achievement Goals</h3>
+    <p class="subtitle">Define rules that automatically trigger achievement notifications when users meet consistency or target weight goals.</p>
+
+    {#if achievementMessage.text}
+      <div class="message {achievementMessage.type}">{achievementMessage.text}</div>
+    {/if}
+
+    <div class="achievements-grid">
+      <div class="achievements-list-container">
+        <h4 style="font-size: 0.875rem; font-weight: 700; color: var(--text-secondary); border-bottom: 1px solid var(--border-light); padding-bottom: 0.5rem;">Active Achievement Rules</h4>
+        <div class="achievements-list" style="margin-top: 1rem;">
+          {#each achievements as achievement}
+            <div class="achievement-card">
+              <div class="achievement-info-details">
+                <span class="achievement-name">{achievement.title}</span>
+                <span class="achievement-desc">{achievement.description}</span>
+                <span class="achievement-tag">
+                  {#if achievement.metric_type === 'diet_consistency'}
+                    Diet Consistency: {achievement.target_value} days
+                  {:else if achievement.metric_type === 'hydration_streak'}
+                    Hydration Streak: {achievement.target_value} days
+                  {:else if achievement.metric_type === 'step_streak'}
+                    Step Streak: {achievement.target_value} days
+                  {:else if achievement.metric_type === 'weight_goal'}
+                    Weight Goal Reached
+                  {:else}
+                    Metric: {achievement.metric_type} ({achievement.target_value})
+                  {/if}
+                </span>
+              </div>
+              <div class="achievement-actions">
+                <div class="toggle-switch">
+                  <span>{achievement.is_active ? 'Active' : 'Inactive'}</span>
+                  <input type="checkbox" checked={achievement.is_active} onchange={() => toggleAchievement(achievement.id, achievement.is_active)} aria-label="Toggle achievement active state" />
+                </div>
+                <button class="delete-btn" onclick={() => deleteAchievement(achievement.id)} aria-label="Delete achievement rule">
+                  Delete
+                </button>
+              </div>
+            </div>
+          {:else}
+            <div class="empty" style="text-align: center; color: var(--text-muted); padding: 2rem; border: 1px dashed var(--border); border-radius: var(--radius);">
+              No achievement goals created yet. Use the form to add one!
+            </div>
+          {/each}
+        </div>
+      </div>
+
+      <div class="create-achievement-form">
+        <h4 style="font-size: 0.875rem; font-weight: 700; color: var(--text-secondary); border-bottom: 1px solid var(--border-light); padding-bottom: 0.5rem;">Create New Achievement Rule</h4>
+        <form onsubmit={handleAddAchievement} style="margin-top: 1rem; display: flex; flex-direction: column; gap: 1rem;">
+          <div class="input-group" style="margin-bottom: 0;">
+            <label for="ach-title">Title</label>
+            <input type="text" id="ach-title" bind:value={newAchievement.title} placeholder="e.g. 🏆 2-Week Diet Streak" required />
+          </div>
+
+          <div class="input-group" style="margin-bottom: 0;">
+            <label for="ach-desc">Description (Alert Text)</label>
+            <textarea id="ach-desc" bind:value={newAchievement.description} placeholder="e.g. Congratulations! You completed 14 days of diet plans in a row!" rows="3" required></textarea>
+          </div>
+
+          <div class="input-group" style="margin-bottom: 0;">
+            <label for="ach-metric">Evaluation Metric</label>
+            <select id="ach-metric" bind:value={newAchievement.metric_type}>
+              <option value="diet_consistency">Diet Consistency (Consecutive Days Logged)</option>
+              <option value="hydration_streak">Hydration Consistency (Consecutive Days Logged)</option>
+              <option value="step_streak">Step Goal Streak (Consecutive Days Completed)</option>
+              <option value="weight_goal">Weight Target Reached (Current Weight Meets Target)</option>
+            </select>
+          </div>
+
+          {#if newAchievement.metric_type !== 'weight_goal'}
+            <div class="input-group" style="margin-bottom: 0;">
+              <label for="ach-val">Target Value (Days)</label>
+              <input type="number" id="ach-val" bind:value={newAchievement.target_value} min="1" required />
+            </div>
+          {/if}
+
+          <button type="submit" class="btn btn-primary" style="margin-top: 0.5rem;" disabled={isAchievementLoading}>
+            {isAchievementLoading ? 'Creating...' : 'Create Achievement'}
+          </button>
+        </form>
       </div>
     </div>
   </div>
@@ -385,4 +571,87 @@
   .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
 
   .quick-actions { display: flex; flex-direction: column; gap: 1.5rem; }
+
+  /* Achievements styles */
+  .achievements-grid {
+    display: grid;
+    grid-template-columns: 1.5fr 1fr;
+    gap: 2rem;
+    margin-top: 1rem;
+  }
+  .achievements-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+  .achievement-card {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem 1.25rem;
+    border-radius: var(--radius);
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--border);
+    transition: all 0.2s;
+  }
+  .achievement-card:hover {
+    border-color: var(--primary-accent);
+    background: rgba(255, 255, 255, 0.04);
+  }
+  .achievement-info-details {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  .achievement-name {
+    font-size: 0.875rem;
+    font-weight: 700;
+    color: var(--text);
+  }
+  .achievement-desc {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+  .achievement-tag {
+    display: inline-block;
+    padding: 0.125rem 0.5rem;
+    font-size: 0.625rem;
+    font-weight: 700;
+    border-radius: 9999px;
+    background: rgba(59, 130, 246, 0.10);
+    color: var(--primary-accent);
+    width: fit-content;
+    margin-top: 0.25rem;
+  }
+  .achievement-actions {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+  .delete-btn {
+    background: none;
+    border: none;
+    color: #EF4444;
+    cursor: pointer;
+    font-size: 0.75rem;
+    font-weight: 700;
+    padding: 0.375rem 0.5rem;
+    border-radius: var(--radius);
+    transition: all 0.2s;
+  }
+  .delete-btn:hover {
+    background: rgba(239, 68, 68, 0.1);
+  }
+  .toggle-switch {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    color: var(--text-muted);
+  }
+  .toggle-switch input[type="checkbox"] {
+    width: auto;
+    cursor: pointer;
+  }
 </style>

@@ -123,8 +123,8 @@
         id: `tpl-${m.id}`,
         day_index: ((m.week_no - 1) * 7) + (m.day_no || 1),
         meal_name: m.meal_name || m.meal_library?.meal_name || 'Untitled Meal',
-        meal_time: categoryTimes[m.meal_time] || '08:00 AM',
-        meal_category: m.meal_time || 'Breakfast',
+        meal_time: m.meal_time || '08:00 AM',
+        meal_category: m.meal_type || 'Breakfast',
         recipe_id: m.meal_library?.recipe_id || null,
         calories: m.calories || m.meal_library?.calories || 0,
         quantity: m.quantity || 1,
@@ -157,7 +157,6 @@
   }
 
   function openEditModal(meal) {
-    if (meal._readonly) return;
     activeMeal = meal;
     editForm = {
       id: meal.id,
@@ -237,6 +236,28 @@
   async function saveEdit() {
     loading = true;
     try {
+      let mealId = editForm.id;
+      if (scheduleSource === 'template' || String(mealId).startsWith('tpl-')) {
+        const { error: genErr } = await supabase.rpc('generate_user_schedule', {
+          p_user_id: profile.id
+        });
+        if (genErr) throw genErr;
+
+        const { data: newMeals, error: findErr } = await supabase
+          .from('user_meal_schedule')
+          .select('id')
+          .eq('user_id', profile.id)
+          .eq('day_index', activeMeal.day_index)
+          .eq('meal_category', activeMeal.meal_category)
+          .eq('meal_time', activeMeal.meal_time);
+
+        if (findErr) throw findErr;
+        if (!newMeals || newMeals.length === 0) {
+          throw new Error('Could not find the generated meal record to update');
+        }
+        mealId = newMeals[0].id;
+      }
+
       const { error } = await supabase
         .from('user_meal_schedule')
         .update({
@@ -248,7 +269,7 @@
           quantity: parseFloat(editForm.quantity) || 1.0,
           comments: editForm.comments
         })
-        .eq('id', editForm.id);
+        .eq('id', mealId);
 
       if (error) throw error;
       showEditModal = false;
@@ -263,6 +284,13 @@
   async function saveAdd() {
     loading = true;
     try {
+      if (scheduleSource === 'template') {
+        const { error: genErr } = await supabase.rpc('generate_user_schedule', {
+          p_user_id: profile.id
+        });
+        if (genErr) throw genErr;
+      }
+
       const { error } = await supabase
         .from('user_meal_schedule')
         .insert([{
@@ -288,14 +316,38 @@
     }
   }
 
-  async function deleteMeal(id) {
+  async function deleteMeal(mealOrId) {
     if (!confirm('Are you sure you want to remove this meal from the user\'s schedule?')) return;
     loading = true;
     try {
+      let targetId = typeof mealOrId === 'object' ? mealOrId.id : mealOrId;
+
+      if (scheduleSource === 'template' || String(targetId).startsWith('tpl-')) {
+        const { error: genErr } = await supabase.rpc('generate_user_schedule', {
+          p_user_id: profile.id
+        });
+        if (genErr) throw genErr;
+
+        const mealObj = typeof mealOrId === 'object' ? mealOrId : activeMeal;
+        const { data: newMeals, error: findErr } = await supabase
+          .from('user_meal_schedule')
+          .select('id')
+          .eq('user_id', profile.id)
+          .eq('day_index', mealObj.day_index)
+          .eq('meal_category', mealObj.meal_category)
+          .eq('meal_time', mealObj.meal_time);
+
+        if (findErr) throw findErr;
+        if (!newMeals || newMeals.length === 0) {
+          throw new Error('Could not find the generated meal record to delete');
+        }
+        targetId = newMeals[0].id;
+      }
+
       const { error } = await supabase
         .from('user_meal_schedule')
         .delete()
-        .eq('id', id);
+        .eq('id', targetId);
 
       if (error) throw error;
       await invalidateAll();
@@ -862,18 +914,17 @@
                           >
                             <div class="meal-card-top">
                               <span class="meal-time">{meal.meal_time}</span>
-                              {#if !meal._readonly}
-                                <div class="card-action-btns">
-                                  <button class="btn-card-edit" onclick={(e) => { e.stopPropagation(); openEditModal(meal); }} title="Edit meal">
-                                    ✏️
-                                  </button>
-                                  <button class="btn-card-delete" onclick={(e) => { e.stopPropagation(); deleteMeal(meal.id); }} title="Remove meal">
-                                    🗑️
-                                  </button>
-                                </div>
-                              {:else}
-                                <span class="template-badge">Template</span>
-                              {/if}
+                              <div class="card-action-btns" style="display: flex; gap: 0.25rem; align-items: center;">
+                                {#if meal._readonly}
+                                  <span class="template-badge" style="font-size: 0.625rem; padding: 1px 4px;">Template</span>
+                                {/if}
+                                <button class="btn-card-edit" onclick={(e) => { e.stopPropagation(); openEditModal(meal); }} title="Edit meal">
+                                  ✏️
+                                </button>
+                                <button class="btn-card-delete" onclick={(e) => { e.stopPropagation(); deleteMeal(meal); }} title="Remove meal">
+                                  🗑️
+                                </button>
+                              </div>
                             </div>
                             <h4 class="meal-title-text" style="font-size: 0.75rem; font-weight: 700; margin: 2px 0 4px 0;">{meal.meal_name || meal.recipes?.name || 'Untitled Meal'}</h4>
                             <div class="meal-stats-bar">
@@ -887,16 +938,14 @@
                             {/if}
                           </div>
                         {/each}
-                        {#if scheduleSource !== 'template'}
-                          <button class="btn-add-inline-plus" onclick={() => openAddModal(i, category)}>
-                            + Add Item
-                          </button>
-                        {/if}
+                        <button class="btn-add-inline-plus" onclick={() => openAddModal(i, category)}>
+                          + Add Item
+                        </button>
                       </div>
                     {:else}
-                      <button class="btn-empty-matrix-slot" onclick={() => { if (scheduleSource !== 'template') openAddModal(i, category); }} style="min-height: 80px;">
-                        <span class="slot-plus-char" style="font-size: 1rem;">{scheduleSource === 'template' ? '—' : '+'}</span>
-                        <span class="slot-plus-lbl" style="font-size: 0.5625rem;">{scheduleSource === 'template' ? 'Read Only' : 'Add'}</span>
+                      <button class="btn-empty-matrix-slot" onclick={() => openAddModal(i, category)} style="min-height: 80px;">
+                        <span class="slot-plus-char" style="font-size: 1rem;">+</span>
+                        <span class="slot-plus-lbl" style="font-size: 0.5625rem;">Add</span>
                       </button>
                     {/if}
                   </div>
@@ -942,18 +991,17 @@
                     <td class="text-center">x{meal.quantity || 1.0}</td>
                     <td class="comments-cell">{meal.comments || '—'}</td>
                     <td class="actions-cell" style="text-align: center;">
-                      {#if !meal._readonly}
-                        <div class="action-btn-group">
-                          <button class="action-table-btn edit" onclick={() => openEditModal(meal)} title="Edit meal">
-                            ✏️ Edit
-                          </button>
-                          <button class="action-table-btn delete" onclick={() => deleteMeal(meal.id)} title="Delete meal">
-                            🗑️ Delete
-                          </button>
-                        </div>
-                      {:else}
-                        <span class="template-badge" style="display: inline-block; padding: 0.25rem 0.5rem;">Template</span>
-                      {/if}
+                      <div class="action-btn-group" style="display: flex; gap: 0.5rem; justify-content: center; align-items: center;">
+                        {#if meal._readonly}
+                          <span class="template-badge" style="display: inline-block; padding: 0.25rem 0.5rem;">Template</span>
+                        {/if}
+                        <button class="action-table-btn edit" onclick={() => openEditModal(meal)} title="Edit meal">
+                          ✏️ Edit
+                        </button>
+                        <button class="action-table-btn delete" onclick={() => deleteMeal(meal)} title="Delete meal">
+                          🗑️ Delete
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 {:else}
@@ -961,11 +1009,7 @@
                     <td colspan="8" class="empty-table-state">
                       <div class="empty-icon">🍽️</div>
                       <p>No meals scheduled for Week {currentWeek} yet.</p>
-                      {#if scheduleSource !== 'template'}
-                        <button class="btn-primary" onclick={() => openAddModal(0, 'Breakfast')}>Schedule First Meal</button>
-                      {:else}
-                        <p style="font-size: 0.75rem; color: var(--text-muted);">This template has no meals defined for this week.</p>
-                      {/if}
+                      <button class="btn-primary" onclick={() => openAddModal(0, 'Breakfast')}>Schedule First Meal</button>
                     </td>
                   </tr>
                 {/each}

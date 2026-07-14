@@ -123,6 +123,7 @@ CREATE TABLE IF NOT EXISTS public.profiles (
     active_plan_id UUID REFERENCES public.diet_plans(id) ON DELETE SET NULL,
     active_plan_start_date TIMESTAMPTZ,
     is_subscribed BOOLEAN DEFAULT FALSE,
+    subscription_expires_at TIMESTAMPTZ DEFAULT NULL,
     joined_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -325,10 +326,37 @@ CREATE TABLE IF NOT EXISTS public.notifications (
     user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
     title TEXT NOT NULL,
     description TEXT,
-    type TEXT DEFAULT 'alert', -- 'alert', 'reminder'
+    type TEXT DEFAULT 'alert', -- 'alert', 'reminder', 'social', 'achievement'
     is_read BOOLEAN DEFAULT FALSE,
+    url TEXT DEFAULT NULL,
+    image_url TEXT DEFAULT NULL,
+    achievement_id UUID DEFAULT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Achievements definitions
+CREATE TABLE IF NOT EXISTS public.achievements (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    metric_type TEXT NOT NULL, -- 'diet_consistency', 'weight_goal', 'step_streak', 'hydration_streak'
+    target_value NUMERIC NOT NULL,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- User Achievements (Join table)
+CREATE TABLE IF NOT EXISTS public.user_achievements (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+    achievement_id UUID NOT NULL REFERENCES public.achievements(id) ON DELETE CASCADE,
+    unlocked_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(user_id, achievement_id)
+);
+
+-- Foreign keys on notifications
+ALTER TABLE public.notifications ADD CONSTRAINT fk_notifications_achievement FOREIGN KEY (achievement_id) REFERENCES public.achievements(id) ON DELETE SET NULL;
 
 -- Diet Assignment Linker
 CREATE TABLE IF NOT EXISTS public.user_diet_assignments (
@@ -362,10 +390,11 @@ DECLARE
     v_start_week INT;
     v_end_week INT;
     v_assignment_id UUID;
+    v_duration_months INT;
 BEGIN
-    -- Get plan details
-    SELECT accessible_weeks, assignment_mode, fixed_start_week
-    INTO v_accessible_weeks, v_assignment_mode, v_fixed_start_week
+    -- Get plan details including duration_months
+    SELECT accessible_weeks, assignment_mode, fixed_start_week, duration_months
+    INTO v_accessible_weeks, v_assignment_mode, v_fixed_start_week, v_duration_months
     FROM public.subscription_plans
     WHERE id = p_subscription_plan_id;
     
@@ -412,6 +441,12 @@ BEGIN
         NOW()
     )
     RETURNING id INTO v_assignment_id;
+
+    -- Update profile subscription details and expiry
+    UPDATE public.profiles
+    SET is_subscribed = true,
+        subscription_expires_at = NOW() + (COALESCE(v_duration_months, 1) * INTERVAL '1 month')
+    WHERE id = p_user_id;
     
     RETURN json_build_object(
         'success', true,
@@ -537,6 +572,165 @@ CREATE INDEX IF NOT EXISTS idx_videos_series ON public.videos(series_id);
 CREATE INDEX IF NOT EXISTS idx_video_likes_video ON public.video_likes(video_id);
 CREATE INDEX IF NOT EXISTS idx_video_comments_video ON public.video_comments(video_id);
 CREATE INDEX IF NOT EXISTS idx_notifications_user ON public.notifications(user_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_achievement ON public.notifications(achievement_id);
+CREATE INDEX IF NOT EXISTS idx_user_achievements_user ON public.user_achievements(user_id);
+
+-- =========================================================================
+-- 6a. AUTOMATIC TRIGGER FUNCTIONS FOR ACHIEVEMENTS & REMINDERS
+-- =========================================================================
+
+-- Evaluate User Achievements Function
+CREATE OR REPLACE FUNCTION public.evaluate_user_achievements(p_user_id UUID)
+RETURNS VOID AS $$
+DECLARE
+    v_achievement RECORD;
+    v_eligible BOOLEAN;
+    v_count INT;
+    v_profile RECORD;
+BEGIN
+    SELECT * INTO v_profile FROM public.profiles WHERE id = p_user_id;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+
+    FOR v_achievement IN 
+        SELECT * FROM public.achievements WHERE is_active = TRUE
+    LOOP
+        IF EXISTS (
+            SELECT 1 FROM public.user_achievements 
+            WHERE user_id = p_user_id AND achievement_id = v_achievement.id
+        ) THEN
+            CONTINUE;
+        END IF;
+
+        v_eligible := FALSE;
+
+        IF v_achievement.metric_type = 'diet_consistency' THEN
+            SELECT COUNT(DISTINCT log_date::date) INTO v_count FROM public.meal_logs
+            WHERE user_id = p_user_id
+              AND log_date >= CURRENT_DATE - (v_achievement.target_value::integer - 1) * INTERVAL '1 day';
+            IF v_count >= v_achievement.target_value::integer THEN v_eligible := TRUE; END IF;
+
+        ELSIF v_achievement.metric_type = 'weight_goal' THEN
+            IF v_profile.target_weight IS NOT NULL AND v_profile.current_weight IS NOT NULL THEN
+                IF ABS(v_profile.current_weight - v_profile.target_weight) <= 0.2 THEN
+                    v_eligible := TRUE;
+                END IF;
+            END IF;
+
+        ELSIF v_achievement.metric_type = 'step_streak' THEN
+            SELECT COUNT(DISTINCT step_date) INTO v_count FROM public.step_logs
+            WHERE user_id = p_user_id AND total_steps >= goal_steps
+              AND step_date >= CURRENT_DATE - (v_achievement.target_value::integer - 1) * INTERVAL '1 day';
+            IF v_count >= v_achievement.target_value::integer THEN v_eligible := TRUE; END IF;
+
+        ELSIF v_achievement.metric_type = 'hydration_streak' THEN
+            SELECT COUNT(DISTINCT logged_at::date) INTO v_count FROM public.hydration_logs
+            WHERE user_id = p_user_id
+              AND logged_at >= CURRENT_DATE - (v_achievement.target_value::integer - 1) * INTERVAL '1 day';
+            IF v_count >= v_achievement.target_value::integer THEN v_eligible := TRUE; END IF;
+        END IF;
+
+        IF v_eligible THEN
+            INSERT INTO public.user_achievements (user_id, achievement_id) VALUES (p_user_id, v_achievement.id) ON CONFLICT DO NOTHING;
+            INSERT INTO public.notifications (user_id, title, description, type, achievement_id)
+            VALUES (p_user_id, v_achievement.title, v_achievement.description, 'achievement', v_achievement.id);
+        END IF;
+    END LOOP;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Trigger functions for log updates
+CREATE OR REPLACE FUNCTION public.trg_evaluate_achievements_meal() RETURNS TRIGGER AS $$
+BEGIN PERFORM public.evaluate_user_achievements(NEW.user_id); RETURN NEW; END; $$ LANGUAGE plpgsql;
+CREATE TRIGGER trg_after_meal_log_insert AFTER INSERT ON public.meal_logs FOR EACH ROW EXECUTE FUNCTION public.trg_evaluate_achievements_meal();
+
+CREATE OR REPLACE FUNCTION public.trg_evaluate_achievements_hydration() RETURNS TRIGGER AS $$
+BEGIN PERFORM public.evaluate_user_achievements(NEW.user_id); RETURN NEW; END; $$ LANGUAGE plpgsql;
+CREATE TRIGGER trg_after_hydration_log_insert AFTER INSERT ON public.hydration_logs FOR EACH ROW EXECUTE FUNCTION public.trg_evaluate_achievements_hydration();
+
+CREATE OR REPLACE FUNCTION public.trg_evaluate_achievements_steps() RETURNS TRIGGER AS $$
+BEGIN PERFORM public.evaluate_user_achievements(NEW.user_id); RETURN NEW; END; $$ LANGUAGE plpgsql;
+CREATE TRIGGER trg_after_step_log_insert AFTER INSERT OR UPDATE OF total_steps ON public.step_logs FOR EACH ROW EXECUTE FUNCTION public.trg_evaluate_achievements_steps();
+
+CREATE OR REPLACE FUNCTION public.trg_evaluate_achievements_weight() RETURNS TRIGGER AS $$
+BEGIN IF OLD.current_weight IS DISTINCT FROM NEW.current_weight THEN PERFORM public.evaluate_user_achievements(NEW.id); END IF; RETURN NEW; END; $$ LANGUAGE plpgsql;
+CREATE TRIGGER trg_after_profile_weight_update AFTER UPDATE OF current_weight ON public.profiles FOR EACH ROW EXECUTE FUNCTION public.trg_evaluate_achievements_weight();
+
+-- Payment Reminders check function
+CREATE OR REPLACE FUNCTION public.check_and_send_payment_reminders()
+RETURNS VOID AS $$
+DECLARE
+    v_user RECORD;
+    v_days_left INT;
+BEGIN
+    FOR v_user IN
+        SELECT id, email, full_name, subscription_expires_at FROM public.profiles
+        WHERE is_subscribed = TRUE AND subscription_expires_at IS NOT NULL AND subscription_expires_at > NOW() AND subscription_expires_at - NOW() <= INTERVAL '3 days'
+    LOOP
+        v_days_left := CEIL(EXTRACT(epoch FROM (v_user.subscription_expires_at - NOW())) / 86400)::integer;
+        IF NOT EXISTS (
+            SELECT 1 FROM public.notifications
+            WHERE user_id = v_user.id AND type = 'reminder' AND title = '💳 Subscription Expiry Reminder' AND created_at >= NOW() - INTERVAL '20 hours'
+        ) THEN
+            INSERT INTO public.notifications (user_id, title, description, type)
+            VALUES (v_user.id, '💳 Subscription Expiry Reminder', 'Hi ' || COALESCE(v_user.full_name, 'there') || ', your subscription plan expires in ' || v_days_left || ' days. Renew now to avoid interruption in your service!', 'reminder');
+        END IF;
+    END LOOP;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Automated Reminders check function
+CREATE OR REPLACE FUNCTION public.check_and_send_automated_reminders()
+RETURNS VOID AS $$
+DECLARE
+    v_water_setting JSONB;
+    v_steps_setting JSONB;
+    v_last_water_sent TIMESTAMPTZ;
+    v_last_steps_sent TIMESTAMPTZ;
+    v_user RECORD;
+BEGIN
+    BEGIN SELECT value::jsonb INTO v_water_setting FROM public.system_settings WHERE key = 'water_automation'; EXCEPTION WHEN OTHERS THEN v_water_setting := NULL; END;
+    BEGIN SELECT value::jsonb INTO v_steps_setting FROM public.system_settings WHERE key = 'steps_automation'; EXCEPTION WHEN OTHERS THEN v_steps_setting := NULL; END;
+
+    IF v_water_setting IS NOT NULL AND (v_water_setting->>'enabled')::boolean = TRUE THEN
+        SELECT MAX(created_at) INTO v_last_water_sent FROM public.notifications WHERE type = 'reminder' AND title = '💧 Hydration Check';
+        IF v_last_water_sent IS NULL OR NOW() - v_last_water_sent >= (v_water_setting->>'interval_hours')::integer * INTERVAL '1 hour' THEN
+            FOR v_user IN SELECT id FROM public.profiles LOOP
+                INSERT INTO public.notifications (user_id, title, description, type)
+                VALUES (v_user.id, '💧 Hydration Check', 'You''re doing great! Don''t forget to log your next glass of water to keep your streak alive.', 'reminder');
+            END LOOP;
+        END IF;
+    END IF;
+
+    IF v_steps_setting IS NOT NULL AND (v_steps_setting->>'enabled')::boolean = TRUE THEN
+        SELECT MAX(created_at) INTO v_last_steps_sent FROM public.notifications WHERE type = 'reminder' AND title = '🏃 Step Goal Update';
+        IF v_last_steps_sent IS NULL OR NOW() - v_last_steps_sent >= (v_steps_setting->>'interval_hours')::integer * INTERVAL '1 hour' THEN
+            FOR v_user IN SELECT id FROM public.profiles LOOP
+                INSERT INTO public.notifications (user_id, title, description, type)
+                VALUES (v_user.id, '🏃 Step Goal Update', 'How are your steps looking? A short walk can help you reach your daily goal!', 'reminder');
+            END LOOP;
+        END IF;
+    END IF;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Seed default achievements
+INSERT INTO public.achievements (title, description, metric_type, target_value)
+SELECT '🏆 1-Week Diet Streak', 'Adhered to your diet plan for 7 consecutive days!', 'diet_consistency', 7
+WHERE NOT EXISTS (SELECT 1 FROM public.achievements WHERE title = '🏆 1-Week Diet Streak');
+
+INSERT INTO public.achievements (title, description, metric_type, target_value)
+SELECT '⚖️ Weight Target Reached', 'Congratulations! You achieved your target weight goal!', 'weight_goal', 1
+WHERE NOT EXISTS (SELECT 1 FROM public.achievements WHERE title = '⚖️ Weight Target Reached');
+
+INSERT INTO public.achievements (title, description, metric_type, target_value)
+SELECT '🏃 Walk-a-Thon Master', 'Completed your step goal for 7 consecutive days!', 'step_streak', 7
+WHERE NOT EXISTS (SELECT 1 FROM public.achievements WHERE title = '🏃 Walk-a-Thon Master');
+
+INSERT INTO public.achievements (title, description, metric_type, target_value)
+SELECT '💧 Aqua Champion', 'Logged your hydration for 7 consecutive days!', 'hydration_streak', 7
+WHERE NOT EXISTS (SELECT 1 FROM public.achievements WHERE title = '💧 Aqua Champion');
 
 -- =========================================================================
 -- 7. REQUIRED BUCKET REFERENCES (STORAGE)

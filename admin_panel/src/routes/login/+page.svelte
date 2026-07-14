@@ -65,7 +65,7 @@
       </div>
 
       <div class="demo-hint">
-        <p><strong>Demo Access:</strong> admin@test.com / admin123</p>
+        <p><strong>Demo Access:</strong> admin1@test.com / admin123</p>
       </div>
 
       <button type="submit" class="btn btn-primary w-full" disabled={loading}>
