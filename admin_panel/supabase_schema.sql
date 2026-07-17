@@ -680,6 +680,122 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
+-- Diet Reminders check function (Upcoming & Missed Meals)
+CREATE OR REPLACE FUNCTION public.check_and_send_diet_reminders()
+RETURNS VOID AS $$
+DECLARE
+    v_diet_setting JSONB;
+    v_user RECORD;
+    v_meal RECORD;
+    v_day_index INT;
+    v_meal_time_val TIME;
+    v_curr_time TIME;
+    v_diff_seconds INT;
+    v_upcoming_sent BOOLEAN;
+    v_missed_sent BOOLEAN;
+    v_is_logged BOOLEAN;
+BEGIN
+    -- Get diet automation settings
+    BEGIN 
+        SELECT value::jsonb INTO v_diet_setting 
+        FROM public.system_settings 
+        WHERE key = 'diet_automation'; 
+    EXCEPTION WHEN OTHERS THEN 
+        v_diet_setting := NULL; 
+    END;
+
+    -- If disabled or not found, exit
+    IF v_diet_setting IS NULL OR (v_diet_setting->>'enabled')::boolean = FALSE THEN
+        RETURN;
+    END IF;
+
+    -- Current local time in Asia/Kolkata
+    v_curr_time := (NOW() AT TIME ZONE 'Asia/Kolkata')::TIME;
+
+    FOR v_user IN 
+        SELECT id, active_plan_start_date 
+        FROM public.profiles 
+        WHERE active_plan_id IS NOT NULL AND active_plan_start_date IS NOT NULL
+    LOOP
+        -- Calculate current day index (1-based)
+        v_day_index := FLOOR(EXTRACT(EPOCH FROM (NOW() - v_user.active_plan_start_date)) / 86400) + 1;
+
+        -- Loop through scheduled meals for the user on this day
+        FOR v_meal IN 
+            SELECT id, meal_time, meal_category, meal_name 
+            FROM public.user_meal_schedule 
+            WHERE user_id = v_user.id AND day_index = v_day_index
+        LOOP
+            -- Parse meal_time
+            BEGIN
+                IF v_meal.meal_time LIKE '%AM%' OR v_meal.meal_time LIKE '%PM%' THEN
+                    v_meal_time_val := TO_TIMESTAMP(v_meal.meal_time, 'HH12:MI AM')::TIME;
+                ELSE
+                    v_meal_time_val := TO_TIMESTAMP(v_meal.meal_time, 'HH24:MI')::TIME;
+                END IF;
+            EXCEPTION WHEN OTHERS THEN
+                v_meal_time_val := NULL;
+            END;
+
+            IF v_meal_time_val IS NOT NULL THEN
+                -- Calculate time difference in seconds
+                v_diff_seconds := EXTRACT(EPOCH FROM (v_meal_time_val - v_curr_time));
+
+                -- CASE 1: Upcoming meal (Scheduled in next 30 minutes, i.e., diff between 0 and 1800 seconds)
+                IF v_diff_seconds >= 0 AND v_diff_seconds <= 1800 THEN
+                    -- Check if already sent
+                    SELECT EXISTS(
+                        SELECT 1 FROM public.notifications 
+                        WHERE user_id = v_user.id 
+                          AND title = '🍽️ Upcoming Meal: ' || v_meal.meal_category 
+                          AND created_at >= NOW() - INTERVAL '12 hours'
+                    ) INTO v_upcoming_sent;
+
+                    IF NOT v_upcoming_sent THEN
+                        INSERT INTO public.notifications (user_id, title, description, type)
+                        VALUES (
+                            v_user.id, 
+                            '🍽️ Upcoming Meal: ' || v_meal.meal_category, 
+                            'Your scheduled ' || v_meal.meal_category || ' (' || v_meal.meal_name || ') is coming up at ' || v_meal.meal_time || '. Get ready!', 
+                            'reminder'
+                        );
+                    END IF;
+
+                -- CASE 2: Missed meal (Scheduled in past, between 30 minutes and 3 hours ago, i.e., diff between -10800 and -1800 seconds)
+                ELSIF v_diff_seconds >= -10800 AND v_diff_seconds <= -1800 THEN
+                    -- Check if user logged it
+                    SELECT EXISTS(
+                        SELECT 1 FROM public.meal_logs 
+                        WHERE user_id = v_user.id 
+                          AND schedule_id = v_meal.id
+                    ) INTO v_is_logged;
+
+                    IF NOT v_is_logged THEN
+                        -- Check if reminder already sent
+                        SELECT EXISTS(
+                            SELECT 1 FROM public.notifications 
+                            WHERE user_id = v_user.id 
+                              AND title = '⚠️ Missed Meal: ' || v_meal.meal_category 
+                              AND created_at >= NOW() - INTERVAL '12 hours'
+                        ) INTO v_missed_sent;
+
+                        IF NOT v_missed_sent THEN
+                            INSERT INTO public.notifications (user_id, title, description, type)
+                            VALUES (
+                                v_user.id, 
+                                '⚠️ Missed Meal: ' || v_meal.meal_category, 
+                                'It looks like you missed logging your ' || v_meal.meal_category || ' (' || v_meal.meal_name || ') scheduled at ' || v_meal.meal_time || '. Please update your log!', 
+                                'reminder'
+                            );
+                        END IF;
+                    END IF;
+                END IF;
+            END IF;
+        END LOOP;
+    END LOOP;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
 -- Automated Reminders check function
 CREATE OR REPLACE FUNCTION public.check_and_send_automated_reminders()
 RETURNS VOID AS $$
@@ -712,6 +828,9 @@ BEGIN
             END LOOP;
         END IF;
     END IF;
+
+    -- Call diet reminders
+    PERFORM public.check_and_send_diet_reminders();
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
