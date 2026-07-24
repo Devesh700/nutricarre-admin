@@ -122,6 +122,7 @@
       .map(m => ({
         id: `tpl-${m.id}`,
         day_index: ((m.week_no - 1) * 7) + (m.day_no || 1),
+        date: m.meal_date,
         meal_name: m.meal_name || m.meal_library?.meal_name || 'Untitled Meal',
         meal_time: m.meal_time || '08:00 AM',
         meal_category: m.meal_type || 'Breakfast',
@@ -232,6 +233,8 @@
         return catOrder.indexOf(a.meal_category) - catOrder.indexOf(b.meal_category);
       })
   );
+
+  console.log(activeWeekMeals)
 
   async function saveEdit() {
     loading = true;
@@ -960,6 +963,7 @@
               <thead>
                 <tr>
                   <th>Day</th>
+                  <th>Date</th>
                   <th>Category</th>
                   <th>Scheduled Time</th>
                   <th>Meal / Recipe Name</th>
@@ -971,10 +975,11 @@
               </thead>
               <tbody>
                 {#each activeWeekMeals as meal}
-                  {@const dayName = days[(meal.day_index - 1) % 7]}
+                  {@const dayName = new Date(meal.meal_date).toLocaleDateString('en-US', { weekday: 'long' })}
                   {@const colors = getCategoryColor(meal.meal_category)}
                   <tr class="schedule-table-row">
                     <td class="day-cell"><strong>{dayName}</strong></td>
+                    <td>{meal.meal_date}</td>
                     <td>
                       <span class="category-pill" style="background: {colors.bg}; color: {colors.text}">
                         <span class="pill-dot" style="background: {colors.dot}"></span>
