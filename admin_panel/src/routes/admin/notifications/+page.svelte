@@ -12,7 +12,8 @@
 
   let automation = $state({
     water: { enabled: false, interval_hours: 2 },
-    steps: { enabled: false, interval_hours: 4 }
+    steps: { enabled: false, interval_hours: 4 },
+    diet: { enabled: false }
   });
 
   let loading = $state(false);
@@ -41,15 +42,26 @@
     if (data) {
       const water = data.find(s => s.key === 'water_automation');
       const steps = data.find(s => s.key === 'steps_automation');
+      const diet = data.find(s => s.key === 'diet_automation');
       if (water) automation.water = water.value;
       if (steps) automation.steps = steps.value;
+      if (diet) automation.diet = diet.value;
     }
   }
 
   async function saveAutomation(type) {
     loading = true;
-    const key = type === 'water' ? 'water_automation' : 'steps_automation';
-    const value = type === 'water' ? automation.water : automation.steps;
+    let key, value;
+    if (type === 'water') {
+      key = 'water_automation';
+      value = automation.water;
+    } else if (type === 'steps') {
+      key = 'steps_automation';
+      value = automation.steps;
+    } else if (type === 'diet') {
+      key = 'diet_automation';
+      value = automation.diet;
+    }
     
     const { error } = await supabase.from('system_settings').upsert({
       key,
@@ -107,6 +119,20 @@
   async function triggerReminder(type) {
     loading = true;
     message = { type: '', text: '' };
+
+    if (type === 'diet') {
+      try {
+        const { error } = await supabase.rpc('check_and_send_diet_reminders');
+        if (error) throw error;
+        message = { type: 'success', text: 'Diet reminders processed and sent to active users!' };
+        fetchStats();
+      } catch (e) {
+        message = { type: 'error', text: e.message };
+      } finally {
+        loading = false;
+      }
+      return;
+    }
 
     let title = '';
     let desc = '';
@@ -298,6 +324,14 @@
               <span class="btn-desc">Encourage daily activity goals</span>
             </div>
           </button>
+
+          <button class="action-btn diet" onclick={() => triggerReminder('diet')} disabled={loading}>
+            <div class="icon">🥗</div>
+            <div class="text">
+              <span class="btn-title">Diet Reminders</span>
+              <span class="btn-desc">Check upcoming/missed meals</span>
+            </div>
+          </button>
         </div>
       </div>
 
@@ -333,6 +367,19 @@
             </div>
           </div>
           <button class="save-small" onclick={() => saveAutomation('steps')}>Update</button>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="title-with-toggle">
+              <span class="p-title">Diet Reminders</span>
+              <input type="checkbox" bind:checked={automation.diet.enabled} onchange={() => saveAutomation('diet')} />
+            </div>
+            <div class="interval-input">
+              <span>Runs based on scheduled meal times</span>
+            </div>
+          </div>
+          <button class="save-small" onclick={() => saveAutomation('diet')}>Update</button>
         </div>
       </div>
     </div>

@@ -1,6 +1,6 @@
 <script>
   import { supabase } from '$lib/supabase';
-  import { uploadToBunny } from '$lib/bunny';
+  import { uploadToR2 } from '$lib/r2';
   import { goto } from '$app/navigation';
   import { onMount } from 'svelte';
 
@@ -60,14 +60,20 @@
     }
   }
 
-  async function handleFileUpload(file, folder) {
-    return await uploadToBunny(file, folder);
+  async function handleFileUpload(file, folder, progressStart, progressWeight) {
+    return await uploadToR2(file, folder, (percent) => {
+      uploadProgress = Math.round(progressStart + (percent * progressWeight) / 100);
+    });
   }
 
   async function handleSubmit(e) {
     e.preventDefault();
-    if (!thumbnailFile || !videoFile) {
-        alert('Please select both a thumbnail and a video file.');
+    if (!thumbnailFile && !useExternalThumb) {
+        alert('Please select a thumbnail file or use an external URL.');
+        return;
+    }
+    if (!videoFile && !useExternalVideo) {
+        alert('Please select a video file or use an external URL.');
         return;
     }
     
@@ -79,20 +85,24 @@
       let vUrl = newReel.video_url;
 
       if (!useExternalThumb && thumbnailFile) {
-        tUrl = await handleFileUpload(thumbnailFile, 'thumbnails');
+        tUrl = await handleFileUpload(thumbnailFile, 'thumbnails', 10, 30);
+      } else {
+        uploadProgress = 40;
       }
-      uploadProgress = 40;
       
       if (!useExternalVideo && videoFile) {
-        vUrl = await handleFileUpload(videoFile, 'videos');
+        vUrl = await handleFileUpload(videoFile, 'videos', 40, 40);
+      } else {
+        uploadProgress = 80;
       }
-      uploadProgress = 80;
+      uploadProgress = 90;
 
       const payload = { ...newReel, thumbnail_url: tUrl, video_url: vUrl };
       
       const { error } = await supabase.from('videos').insert([payload]);
       if (error) throw error;
 
+      uploadProgress = 100;
       goto('/admin/reels');
     } catch (err) {
       alert('Error: ' + err.message);
@@ -143,13 +153,13 @@
             </div>
             
             {#if useExternalThumb}
-              <input type="text" bind:value={newReel.thumbnail_url} class="input-field" placeholder="Paste thumbnail URL (e.g. Bunny.net link)" />
+              <input type="text" bind:value={newReel.thumbnail_url} class="input-field" placeholder="Paste thumbnail URL (e.g. Cloudflare R2 link)" />
             {:else}
               <div class="preview-area {thumbPreview ? 'has-file' : ''}">
                 {#if thumbPreview}<img src={thumbPreview} alt="" />{/if}
                 <div class="upload-prompt {thumbPreview ? 'overlay' : ''}">
                   <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>
-                  <span>{thumbPreview ? 'Change Image' : 'Upload to Bunny.net'}</span>
+                  <span>{thumbPreview ? 'Change Image' : 'Upload to Cloudflare R2'}</span>
                 </div>
                 <input type="file" accept="image/*" onchange={e => handleFileChange(e, 'thumb')} />
               </div>
@@ -165,13 +175,13 @@
             </div>
 
             {#if useExternalVideo}
-              <input type="text" bind:value={newReel.video_url} class="input-field" placeholder="Paste video URL (Bunny.net/Cloudflare)" />
+              <input type="text" bind:value={newReel.video_url} class="input-field" placeholder="Paste video URL (Cloudflare R2)" />
             {:else}
               <div class="preview-area {videoPreview ? 'has-file' : ''}">
                 {#if videoPreview}<video src={videoPreview} class="mini-player"></video>{/if}
                 <div class="upload-prompt {videoPreview ? 'overlay' : ''}">
                   <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>
-                  <span>{videoPreview ? 'Change Video' : 'Upload to Bunny.net'}</span>
+                  <span>{videoPreview ? 'Change Video' : 'Upload to Cloudflare R2'}</span>
                   <span class="limit-hint">Optimized Streaming</span>
                 </div>
                 <input type="file" accept="video/*" onchange={e => handleFileChange(e, 'video')} />
@@ -185,7 +195,7 @@
         {#if isUploading}
           <div class="upload-status">
             <div class="spinner"></div>
-            <span>Uploading to Bunny.net CDN ({uploadProgress}%)</span>
+            <span>Uploading to Cloudflare R2 ({uploadProgress}%)</span>
           </div>
         {/if}
         <button type="button" class="btn text" onclick={() => goto('/admin/reels')}>Cancel</button>
