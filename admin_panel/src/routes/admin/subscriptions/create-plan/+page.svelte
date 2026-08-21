@@ -57,7 +57,7 @@
     };
     if (useTemplate) {
       planData.diet_template_id = diet_template_id || null;
-      planData.accessible_weeks = accessible_weeks;
+      planData.accessible_weeks = accessible_weeks || (duration_months ? duration_months * 4 : 4);
       planData.assignment_mode = assignment_mode;
       planData.fixed_start_week = assignment_mode === 'fixed' ? fixed_start_week : null;
     }
@@ -152,7 +152,7 @@
           </div>
           <div class="input-group">
             <label for="months">Months</label>
-            <input id="months" type="number" bind:value={duration_months} />
+            <input id="months" type="number" bind:value={duration_months} oninput={() => { accessible_weeks = duration_months * 4; }} />
           </div>
         </div>
 
