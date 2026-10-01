@@ -446,13 +446,14 @@ DECLARE
     v_accessible_weeks INT;
     v_assignment_mode TEXT;
     v_fixed_start_week INT;
+    v_duration_months INT;
     v_total_weeks INT;
     v_start_week INT;
     v_end_week INT;
     v_assignment_id UUID;
 BEGIN
-    SELECT accessible_weeks, assignment_mode, fixed_start_week
-    INTO v_accessible_weeks, v_assignment_mode, v_fixed_start_week
+    SELECT accessible_weeks, assignment_mode, fixed_start_week, duration_months
+    INTO v_accessible_weeks, v_assignment_mode, v_fixed_start_week, v_duration_months
     FROM public.subscription_plans
     WHERE id = p_subscription_plan_id;
     
@@ -475,7 +476,7 @@ BEGIN
         v_start_week := 1;
     END IF;
     
-    v_end_week := v_start_week + COALESCE(v_accessible_weeks, v_total_weeks) - 1;
+    v_end_week := v_start_week + COALESCE(v_accessible_weeks, v_duration_months * 4, v_total_weeks) - 1;
     
     INSERT INTO public.user_diet_assignments (
         user_id,
@@ -489,7 +490,7 @@ BEGIN
         p_user_id,
         p_subscription_plan_id,
         p_diet_template_id,
-        COALESCE(v_accessible_weeks, v_total_weeks),
+        COALESCE(v_accessible_weeks, v_duration_months * 4, v_total_weeks),
         v_start_week,
         v_end_week,
         NOW()
@@ -499,7 +500,7 @@ BEGIN
     RETURN json_build_object(
         'success', true,
         'assignment_id', v_assignment_id,
-        'weeks_granted', COALESCE(v_accessible_weeks, v_total_weeks),
+        'weeks_granted', COALESCE(v_accessible_weeks, v_duration_months * 4, v_total_weeks),
         'actual_start_week', v_start_week,
         'actual_end_week', v_end_week
     );
@@ -516,6 +517,7 @@ DECLARE
     v_plan_id UUID;
     v_inserted_count INT;
     v_weeks_generated INT;
+    v_duration_months INT;
 BEGIN
     SELECT a.*, t.diet_code
     INTO v_assignment
@@ -583,9 +585,18 @@ BEGIN
 
     v_weeks_generated := v_assignment.actual_end_week - v_assignment.actual_start_week + 1;
 
+    -- Get subscription plan duration
+    SELECT duration_months
+    INTO v_duration_months
+    FROM public.subscription_plans
+    WHERE id = v_assignment.subscription_plan_id;
+
     UPDATE public.profiles
     SET active_plan_id = v_plan_id,
-        active_plan_start_date = NOW()
+        active_plan_start_date = NOW(),
+        is_subscribed = TRUE,
+        subscription_date = NOW(),
+        subscription_expires_at = NOW() + (COALESCE(v_duration_months, 1) || ' month')::interval
     WHERE id = p_user_id;
 
     RETURN json_build_object(
@@ -830,6 +841,15 @@ DECLARE
     v_user RECORD;
     v_days_left INT;
 BEGIN
+    -- First, deactivate expired subscriptions
+    UPDATE public.profiles
+    SET is_subscribed = FALSE,
+        active_plan_id = NULL
+    WHERE is_subscribed = TRUE
+      AND subscription_expires_at IS NOT NULL
+      AND subscription_expires_at <= NOW();
+
+    -- Then check and send reminders
     FOR v_user IN
         SELECT id, email, full_name, subscription_expires_at FROM public.profiles
         WHERE is_subscribed = TRUE AND subscription_expires_at IS NOT NULL AND subscription_expires_at > NOW() AND subscription_expires_at - NOW() <= INTERVAL '3 days'
