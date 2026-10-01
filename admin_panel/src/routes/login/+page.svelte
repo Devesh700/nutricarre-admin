@@ -64,14 +64,18 @@
         />
       </div>
 
-      <div class="demo-hint">
-        <p><strong>Demo Access:</strong> admin1@test.com / admin123</p>
-      </div>
+      
 
       <button type="submit" class="btn btn-primary w-full" disabled={loading}>
         {loading ? 'Authenticating...' : 'Sign In'}
       </button>
     </form>
+
+    <div class="login-footer-links">
+      <a href="/terms">Terms & Conditions</a>
+      <span class="dot-sep">•</span>
+      <a href="/privacy">Privacy Policy</a>
+    </div>
   </div>
 </div>
 
@@ -178,5 +182,32 @@
     opacity: 0.6;
     cursor: not-allowed;
     transform: none;
+  }
+
+  .login-footer-links {
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border-light);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    font-size: 0.75rem;
+  }
+
+  .login-footer-links a {
+    color: var(--text-muted);
+    text-decoration: none;
+    font-weight: 500;
+    transition: color 0.15s;
+  }
+
+  .login-footer-links a:hover {
+    color: var(--primary-accent);
+    text-decoration: underline;
+  }
+
+  .dot-sep {
+    color: var(--border);
   }
 </style>
