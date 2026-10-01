@@ -29,7 +29,7 @@
   <div class="login-card glass">
     <div class="header">
       <div class="logo">
-        <span class="dot"></span>
+        <img src="/logo_transparent.png" alt="DietWise Logo" class="brand-logo" />
         <h1>DietWise</h1>
       </div>
       <p>Admin Portal Login</p>
@@ -112,11 +112,10 @@
     margin-bottom: 0.5rem;
   }
 
-  .dot {
-    width: 10px;
-    height: 10px;
-    background: var(--primary);
-    border-radius: 50%;
+  .brand-logo {
+    height: 40px;
+    width: auto;
+    object-fit: contain;
   }
 
   h1 {

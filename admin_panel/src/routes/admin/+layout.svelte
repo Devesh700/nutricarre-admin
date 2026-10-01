@@ -10,9 +10,10 @@
   let profile = $state(null);
 
   onMount(async () => {
+    if ($page.url.pathname === '/admin/login') return;
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) {
-      goto('/login');
+      goto('/admin/login');
     } else {
       user = session.user;
       const { data } = await supabase.from('profiles').select('*').eq('id', user.id).single();
@@ -35,7 +36,7 @@
   async function handleLogout() {
     await supabase.auth.signOut();
     localStorage.removeItem('mock_session');
-    goto('/login');
+    goto('/admin/login');
   }
 
   function isActive(path) {
@@ -49,7 +50,6 @@
     { name: 'Employees', icon: 'M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z', path: '/admin/employees', adminOnly: true },
     { name: 'Consultants', icon: 'M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z', path: '/admin/consultants', adminOnly: true },
     { type: 'divider' },
-    // { name: 'Diet Plans', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01', path: '/admin/diets', adminOnly: true },
     { name: 'Recipes', icon: 'M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253', path: '/admin/recipes', adminOnly: true },
     { name: 'Diet Templates', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01', path: '/admin/diet-templates', adminOnly: true },
     { name: 'Meal Library', icon: 'M4 6h16M4 12h16M4 18h16', path: '/admin/meal-library', adminOnly: true },
@@ -74,72 +74,70 @@
   );
 </script>
 
-<div class="layout">
-  <!-- Sidebar -->
-  <aside class="sidebar">
-    <div class="sidebar-brand">
-      <div class="brand-icon">
-        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M12 2L2 7L12 12L22 7L12 2Z" fill="currentColor" />
-          <path d="M2 17L12 22L22 17" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-          <path d="M2 12L12 17L22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+{#if $page.url.pathname === '/admin/login'}
+  {@render children()}
+{:else}
+  <div class="layout">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <img src="/logo_transparent.png" alt="DietWise Logo" class="brand-logo-img" />
+        <div>
+          <div class="brand-name">DietWise</div>
+          <div class="brand-sub">Admin</div>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav">
+        {#each filteredNavItems as item}
+          {#if item.type === 'divider'}
+            <div class="nav-divider"></div>
+          {:else}
+            <a
+              href={item.path}
+              class="nav-link"
+              class:active={isActive(item.path)}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={item.icon} />
+              </svg>
+              <span>{item.name}</span>
+            </a>
+          {/if}
+        {/each}
+      </nav>
+
+      <button class="logout-btn" onclick={handleLogout}>
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
         </svg>
-      </div>
-      <div>
-        <div class="brand-name">DietWise</div>
-        <div class="brand-sub">Admin</div>
-      </div>
-    </div>
+        <span>Sign Out</span>
+      </button>
+    </aside>
 
-    <nav class="sidebar-nav">
-      {#each filteredNavItems as item}
-        {#if item.type === 'divider'}
-          <div class="nav-divider"></div>
-        {:else}
-          <a
-            href={item.path}
-            class="nav-link"
-            class:active={isActive(item.path)}
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={item.icon} />
-            </svg>
-            <span>{item.name}</span>
-          </a>
-        {/if}
-      {/each}
-    </nav>
-
-    <button class="logout-btn" onclick={handleLogout}>
-      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-      </svg>
-      <span>Sign Out</span>
-    </button>
-  </aside>
-
-  <!-- Main -->
-  <main class="main">
-    <header class="topbar">
-      <div class="topbar-left">
-        <span class="breadcrumb">{$page.url.pathname.split('/').filter(Boolean).map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(' / ')}</span>
-      </div>
-      <div class="topbar-profile">
-        <div class="profile-avatar">
-          {user?.email?.[0]?.toUpperCase() || 'A'}
+    <!-- Main -->
+    <main class="main">
+      <header class="topbar">
+        <div class="topbar-left">
+          <span class="breadcrumb">{$page.url.pathname.split('/').filter(Boolean).map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(' / ')}</span>
         </div>
-        <div class="profile-info">
-          <span class="profile-name">{profile?.full_name || user?.email?.split('@')[0] || 'Admin'}</span>
-          <span class="profile-role">{profile?.role === 'employee' ? 'Support Specialist' : 'Administrator'}</span>
+        <div class="topbar-profile">
+          <div class="profile-avatar">
+            {user?.email?.[0]?.toUpperCase() || 'A'}
+          </div>
+          <div class="profile-info">
+            <span class="profile-name">{profile?.full_name || user?.email?.split('@')[0] || 'Admin'}</span>
+            <span class="profile-role">{profile?.role === 'employee' ? 'Support Specialist' : 'Administrator'}</span>
+          </div>
         </div>
-      </div>
-    </header>
+      </header>
 
-    <div class="page-content">
-      {@render children()}
-    </div>
-  </main>
-</div>
+      <div class="page-content">
+        {@render children()}
+      </div>
+    </main>
+  </div>
+{/if}
 
 <style>
   .layout {
@@ -167,6 +165,13 @@
     gap: 0.75rem;
     padding: 0.5rem 0.75rem;
     margin-bottom: 1.75rem;
+  }
+
+  .brand-logo-img {
+    height: 38px;
+    width: auto;
+    object-fit: contain;
+    flex-shrink: 0;
   }
 
   .brand-icon {
