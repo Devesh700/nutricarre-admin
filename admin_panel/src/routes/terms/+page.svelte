@@ -350,6 +350,8 @@
         <span class="sep">•</span>
         <a href="/privacy">Privacy Policy</a>
         <span class="sep">•</span>
+        <a href="/delete-account">Delete Account</a>
+        <span class="sep">•</span>
         <a href="/login">Admin Login</a>
       </div>
     </div>

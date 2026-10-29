@@ -1045,3 +1045,26 @@ WHERE NOT EXISTS (SELECT 1 FROM public.achievements WHERE title = '💧 Aqua Cha
 -- 2. "thumbnails" (Public) - For Reel cover images
 -- 3. "videos" (Public) - For Reel video files
 -- 4. "video-thumbnails" (Public) - For Series header/thumbnail photos
+
+-- =========================================================================
+-- 8. COMPLIANCE & ACCOUNT DELETION REQUESTS (Google Play & GDPR Policy)
+-- =========================================================================
+CREATE TABLE IF NOT EXISTS public.account_deletion_requests (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    reference_id TEXT NOT NULL UNIQUE,
+    user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+    email TEXT NOT NULL,
+    phone TEXT,
+    reason TEXT,
+    notes TEXT,
+    status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'completed', 'cancelled')),
+    ip_address TEXT,
+    user_agent TEXT,
+    requested_at TIMESTAMPTZ DEFAULT NOW(),
+    scheduled_purge_date TIMESTAMPTZ DEFAULT (NOW() + INTERVAL '30 days'),
+    completed_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_deletion_requests_email ON public.account_deletion_requests(email);
+CREATE INDEX IF NOT EXISTS idx_deletion_requests_status ON public.account_deletion_requests(status);
+

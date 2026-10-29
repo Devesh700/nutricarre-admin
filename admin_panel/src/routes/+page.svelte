@@ -272,6 +272,7 @@
         <a href="/terms">Terms & Conditions</a>
         <a href="/privacy">Privacy Policy</a>
         <a href="/legal">Legal Hub</a>
+        <a href="/delete-account">Delete Account</a>
         <button class="footer-admin-link" onclick={handleAdminClick}>Admin Login</button>
       </div>
     </div>

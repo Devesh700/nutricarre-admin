@@ -10,7 +10,15 @@
   onMount(() => {
     const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'SIGNED_OUT') {
-        goto('/login');
+        const path = $page.url.pathname;
+        const isPublic = path === '/' || 
+                         path.startsWith('/terms') || 
+                         path.startsWith('/privacy') || 
+                         path.startsWith('/legal') || 
+                         path.startsWith('/delete-account');
+        if (!isPublic) {
+          goto('/login');
+        }
       } else if (event === 'SIGNED_IN' && $page.url.pathname === '/login') {
         goto('/admin/dashboard');
       }

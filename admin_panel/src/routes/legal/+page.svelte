@@ -28,6 +28,9 @@
       >
         🔒 Privacy Policy
       </button>
+      <a href="/delete-account" class="tab-btn delete-btn">
+        🗑️ Delete Account
+      </a>
     </div>
   </div>
 </div>

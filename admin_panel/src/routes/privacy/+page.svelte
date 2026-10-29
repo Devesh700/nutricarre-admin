@@ -252,6 +252,9 @@
           <li><strong>Account Inactivity:</strong> Accounts inactive for over 24 consecutive months are flagged for automated archiving.</li>
           <li><strong>Immediate Account Deletion:</strong> Upon receiving an explicit deletion request, all associated personal identifiers, calorie logs, and profile records are permanently purged from our primary databases within 30 calendar days.</li>
         </ul>
+        <div style="margin-top: 1.25rem; background: #EFF6FF; border: 1.5px solid #BFDBFE; border-radius: 0.75rem; padding: 1rem 1.25rem; color: #1E3A8A;">
+          <strong>Official Google Play Account Deletion Resource:</strong> You can submit an online account deletion request or instantly wipe your account and health data without requiring the app by visiting our dedicated <a href="/delete-account" style="color: #2563EB; font-weight: 700; text-decoration: underline;">Account & Data Deletion Portal →</a>.
+        </div>
       </section>
       {/if}
 
@@ -360,6 +363,8 @@
         <a href="/terms">Terms of Service</a>
         <span class="sep">•</span>
         <a href="/privacy">Privacy Policy</a>
+        <span class="sep">•</span>
+        <a href="/delete-account">Delete Account</a>
         <span class="sep">•</span>
         <a href="/login">Admin Login</a>
       </div>
